@@ -101,18 +101,3 @@ client.on('messageCreate', async (message) => {
 
 client.login(process.env.DISCORD_TOKEN);
 {
-  "name": "discord-tts-bot",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "start": "node index.js"
-  },
-  "dependencies": {
-    "@discordjs/voice": "^0.18.0",
-    "discord.js": "^14.18.0",
-    "google-tts-api": "^2.0.2",
-    "libsodium-wrappers": "^0.7.15",
-    "opusscript": "^0.0.8"
-  }
-}
