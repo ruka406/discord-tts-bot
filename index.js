@@ -130,3 +130,5 @@ client.on('messageCreate', async (message) => {
 });
 
 client.login(process.env.DISCORD_TOKEN);
+const http = require('http');
+http.createServer((_, res) => res.end('OK')).listen(process.env.PORT || 3000);
