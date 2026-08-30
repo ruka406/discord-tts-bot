@@ -1,4 +1,84 @@
-return;
+const { Client, GatewayIntentBits } = require('discord.js');
+const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, VoiceConnectionStatus } = require('@discordjs/voice');
+const googleTTS = require('google-tts-api');
+
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildVoiceStates
+  ]
+});
+
+let connection = null;
+let player = createAudioPlayer();
+let speechQueue = [];
+let isPlaying = false;
+
+client.on('ready', () => {
+  console.log(`Botがログインしました: ${client.user.tag}`);
+});
+
+async function playNext() {
+  if (speechQueue.length === 0) {
+    isPlaying = false;
+    return;
+  }
+
+  isPlaying = true;
+  const text = speechQueue.shift();
+
+  try {
+    const url = googleTTS.getAudioUrl(text, {
+      lang: 'ja',
+      slow: false,
+      host: 'https://translate.google.com',
+      timeout: 10000,
+    });
+
+    const resource = createAudioResource(url);
+    player.play(resource);
+  } catch (error) {
+    console.error('TTSエラー:', error);
+    isPlaying = false;
+    playNext();
+  }
+}
+
+player.on(AudioPlayerStatus.Idle, () => {
+  playNext();
+});
+
+client.on('messageCreate', async (message) => {
+  if (message.author.bot) return;
+
+  const content = message.content;
+
+  // ボイスチャンネル参加コマンド
+  if (content === '!join' || content === '!j') {
+    if (message.member?.voice.channel) {
+      connection = joinVoiceChannel({
+        channelId: message.member.voice.channel.id,
+        guildId: message.guild.id,
+        adapterCreator: message.guild.voiceAdapterCreator,
+      });
+      connection.subscribe(player);
+      message.reply('ボイスチャンネルに参加しました！');
+    } else {
+      message.reply('先にボイスチャンネルに入ってください。');
+    }
+    return;
+  }
+
+  // ボイスチャンネル退出コマンド
+  if (content === '!leave' || content === '!l') {
+    if (connection) {
+      connection.destroy();
+      connection = null;
+      message.reply('切断しました。');
+    }
+    return;
   }
 
   // 読み上げ処理
