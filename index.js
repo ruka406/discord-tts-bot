@@ -1,5 +1,5 @@
 const { Client, GatewayIntentBits } = require('discord.js');
-const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, VoiceConnectionStatus } = require('@discordjs/voice');
+const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, getVoiceConnection } = require('@discordjs/voice');
 const googleTTS = require('google-tts-api');
 
 const client = new Client({
@@ -12,14 +12,16 @@ const client = new Client({
 });
 
 let connection = null;
-let player = createAudioPlayer();
+const player = createAudioPlayer();
 let speechQueue = [];
 let isPlaying = false;
+let targetChannelId = null;
 
 client.on('ready', () => {
   console.log(`Botがログインしました: ${client.user.tag}`);
 });
 
+// 音声再生キューの処理
 async function playNext() {
   if (speechQueue.length === 0) {
     isPlaying = false;
@@ -27,11 +29,11 @@ async function playNext() {
   }
 
   isPlaying = true;
-  const text = speechQueue.shift();
+  const { text, lang } = speechQueue.shift();
 
   try {
     const url = googleTTS.getAudioUrl(text, {
-      lang: 'ja',
+      lang: lang || 'ja',
       slow: false,
       host: 'https://translate.google.com',
       timeout: 10000,
@@ -40,7 +42,7 @@ async function playNext() {
     const resource = createAudioResource(url);
     player.play(resource);
   } catch (error) {
-    console.error('TTSエラー:', error);
+    console.error('TTS生成エラー:', error);
     isPlaying = false;
     playNext();
   }
@@ -50,39 +52,65 @@ player.on(AudioPlayerStatus.Idle, () => {
   playNext();
 });
 
+player.on('error', error => {
+  console.error('再生エラー:', error);
+  isPlaying = false;
+  playNext();
+});
+
+// VCの入退出イベント検知（自動接続・自動解除）
+client.on('voiceStateUpdate', (oldState, newState) => {
+  const guild = newState.guild;
+
+  // Bot自身の動作は無視
+  if (newState.member.user.bot) return;
+
+  // 1. ユーザーがVCに入ったとき（Botが未接続なら自動接続）
+  if (!oldState.channelId && newState.channelId) {
+    const vc = newState.channel;
+    // 人間（Bot以外）がいる場合接続
+    const nonBots = vc.members.filter(m => !m.user.bot);
+    if (nonBots.size > 0 && !connection) {
+      targetChannelId = vc.id;
+      connection = joinVoiceChannel({
+        channelId: vc.id,
+        guildId: guild.id,
+        adapterCreator: guild.voiceAdapterCreator,
+        selfDeaf: true
+      });
+      connection.subscribe(player);
+      console.log(`自動接続しました: ${vc.name}`);
+    }
+  }
+
+  // 2. ユーザーがVCから退出したとき（全員いなくなったら自動切断）
+  if (connection && targetChannelId) {
+    const currentVC = guild.channels.cache.get(targetChannelId);
+    if (currentVC) {
+      const nonBots = currentVC.members.filter(m => !m.user.bot);
+      if (nonBots.size === 0) {
+        connection.destroy();
+        connection = null;
+        targetChannelId = null;
+        speechQueue = [];
+        isPlaying = false;
+        console.log('VCに人がいなくなったため、自動切断しました。');
+      }
+    }
+  }
+});
+
+// チャットメッセージの読み上げ処理
 client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
 
-  const content = message.content;
+  // Botがボイスチャンネルに参加している場合のみ処理
+  if (connection) {
+    const content = message.content;
 
-  // ボイスチャンネル参加コマンド
-  if (content === '!join' || content === '!j') {
-    if (message.member?.voice.channel) {
-      connection = joinVoiceChannel({
-        channelId: message.member.voice.channel.id,
-        guildId: message.guild.id,
-        adapterCreator: message.guild.voiceAdapterCreator,
-      });
-      connection.subscribe(player);
-      message.reply('ボイスチャンネルに参加しました！');
-    } else {
-      message.reply('先にボイスチャンネルに入ってください。');
-    }
-    return;
-  }
+    // コマンド類やURLはスキップ
+    if (content.startsWith('!') || content.startsWith('/') || content.startsWith('http')) return;
 
-  // ボイスチャンネル退出コマンド
-  if (content === '!leave' || content === '!l') {
-    if (connection) {
-      connection.destroy();
-      connection = null;
-      message.reply('切断しました。');
-    }
-    return;
-  }
-
-  // 読み上げ処理
-  if (connection && !content.startsWith('!') && !content.startsWith('/')) {
     const userName = message.member?.displayName || message.author.username;
     
     let contentText = content;
@@ -91,7 +119,9 @@ client.on('messageCreate', async (message) => {
     }
 
     const textToSpeak = `${userName}。${contentText}`;
-    speechQueue.push(textToSpeak);
+    
+    // キューに追加して順番に再生
+    speechQueue.push({ text: textToSpeak, lang: 'ja' });
 
     if (!isPlaying) {
       playNext();
